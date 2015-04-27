@@ -11,7 +11,7 @@ type FileChecksum struct {
 }
 
 func (this *FileChecksum) Print() {
-	beego.Info(fmt.Sprintf("Path: %s  check: %s", this.Path, this.Checksum))
+	beego.Debug(fmt.Sprintf("Path: %s  check: %s", this.Path, this.Checksum))
 }
 func NewFileChecksum(path, checksum string) *FileChecksum {
 	return &FileChecksum{

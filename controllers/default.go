@@ -15,21 +15,16 @@ import (
 	"strings"
 )
 
-var G_updateInfo *UpdateInfo
-
-// var Version = "1.0"
-
-// var G_FileList = FileChecksumList{}
-var IgnoreFileNameList = []string{}
-var G_ignoreFolderNameList = []string{}
-
-// var G_printLog = true
-// var DebugLevel = 4
-var iniconf config.ConfigContainer = nil
-var G_dirSrc = "./"
-var G_dirDest = "./output/"
-var G_appVersion = ""
-var G_versionInfoFileName = "VersionInfo.md"
+var (
+	G_updateInfo           *UpdateInfo
+	IgnoreFileNameList                            = []string{}
+	G_ignoreFolderNameList                        = []string{}
+	iniconf                config.ConfigContainer = nil
+	G_dirSrc                                      = "./"
+	G_dirDest                                     = "./output/"
+	G_appVersion                                  = ""
+	G_versionInfoFileName                         = "VersionInfo.md"
+)
 
 func init() {
 	G_updateInfo = NewUpdateInfo("1.0", FileChecksumList{}, FileChecksumList{})
@@ -55,14 +50,11 @@ func OutputVersionFile() {
 			return
 		}
 	}
-	dirList, fileList, err := CreateChecksumPathList(G_dirSrc)
+	err := prepareVersionFileContent()
 	if err != nil {
 		beego.Error("创建源目录文件列表出错：" + err.Error())
 		return
 	}
-	G_updateInfo.FileList = fileList
-	G_updateInfo.DirList = dirList
-
 	err = copyFileToOutputDir()
 	if err != nil {
 		beego.Error("向输出目录拷贝文件时出错：" + err.Error())
@@ -73,56 +65,75 @@ func OutputVersionFile() {
 		beego.Error("在输出目录创建版本信息文件出错：" + err.Error())
 		return
 	}
+	beego.Warn("升级文件输出成功")
+}
+func prepareVersionFileContent() error {
+	dirList, fileList, err := CreateChecksumPathList(G_dirSrc)
+	if err != nil {
+		return err
+	}
+	G_updateInfo.FileList = fileList
+	G_updateInfo.DirList = dirList
+	return nil
 }
 func copyFileToOutputDir() error {
 	//对比对应Bin目录的文件，进行同步
 
 	//同步目录
 	// outputBinDirList := []string{}
+	count := 0
 	for _, file := range G_updateInfo.DirList {
-		destDir := strings.Replace(file.Path, G_dirSrc, G_dirDest+"Bin/", 1)
+		// destDir := strings.Replace(file.Path, G_dirSrc, G_dirDest+"Bin/", 1)
+		destDir := G_dirDest + "Bin/" + file.Path
 		if Exist(destDir) == false {
 			if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
 				return err
 			}
 			beego.Info("创建了目录：" + destDir)
+			count += 1
 		}
 	}
-
+	beego.Warn(fmt.Sprintf("共创建了 %d 个新目录", count))
+	count = 0
 	// 同步文件
 	for _, file := range G_updateInfo.FileList {
-		destDir := strings.Replace(file.Path, G_dirSrc, G_dirDest+"Bin/", 1)
+		// destDir := strings.Replace(file.Path, G_dirSrc, G_dirDest+"Bin/", 1)
+		destDir := G_dirDest + "Bin/" + file.Path
+		dirSrc := G_dirSrc + file.Path
 		if Exist(destDir) == false {
-			if err := CopyFile(destDir, file.Path); err != nil {
+			if err := CopyFile(destDir, dirSrc); err != nil {
 				return err
 			}
 			beego.Info("复制了文件：" + destDir)
+			count += 1
 		} else {
 			if checksum, err := createChecksumForFile(destDir); err != nil {
 				return err
 			} else {
 				if checksum == file.Checksum {
-					beego.Info("源文件与目标文件相同，不需要复制 " + file.Path)
+					// beego.Trace("源文件与目标文件相同，不需要复制 " + file.Path)
 				} else {
 					beego.Info("源文件存在，但是文件发生了变化，需要首先删除源文件")
 					if err := os.Remove(destDir); err != nil {
 						return err
 					} else {
-						if err := CopyFile(destDir, file.Path); err != nil {
+						if err := CopyFile(destDir, dirSrc); err != nil {
 							return err
 						}
 						beego.Info("复制了文件：" + destDir)
+						count += 1
 					}
 				}
 			}
 		}
 	}
+	beego.Warn(fmt.Sprintf("共复制了 %d 个文件", count))
 
 	return nil
 }
 func createVersionInfoFile(versionInfoFileFullPath string) error {
 	ui := G_updateInfo
-	ui.Print()
+	// ui.Print()
 
 	bytes, err := ui.ToJson()
 	if err != nil {
@@ -159,7 +170,8 @@ func CreateChecksumPathList(root string) (FileChecksumList, FileChecksumList, er
 				return nil
 			} else {
 				beego.Debug(fmt.Sprintf("目录：%s", fullPath))
-				listDir = listDir.Add(NewFileChecksum(fullPath, ""))
+				pathTrimed := strings.Replace(fullPath, G_dirSrc, "", 1)
+				listDir = listDir.Add(NewFileChecksum(pathTrimed, ""))
 			}
 		} else {
 			fileName := path.Base(fullPath)
@@ -176,7 +188,8 @@ func CreateChecksumPathList(root string) (FileChecksumList, FileChecksumList, er
 			if checksum, err := createChecksumForFile(fullPath); err != nil {
 				return err
 			} else {
-				listFile = listFile.Add(NewFileChecksum(fullPath, checksum))
+				pathTrimed := strings.Replace(fullPath, G_dirSrc, "", 1)
+				listFile = listFile.Add(NewFileChecksum(pathTrimed, checksum))
 			}
 		}
 		return nil
@@ -219,20 +232,19 @@ func initCli() {
 				}
 			},
 		}, {
-			// 	Name:        "appdir",
-			// 	ShortName:   "ad",
-			// 	Usage:       "设置升级应用的目录",
-			// 	Description: "如果为空，则认为是当前目录的Bin文件夹",
-			// 	Action: func(c *cli.Context) {
-			// 		// fmt.Println(fmt.Sprintf("%#v", c.Command))
-			// 		// fmt.Println("-----------------------------")
-			// 		root := strings.ToLower(c.Args().First())
-			// 		if len(root) <= 0 {
-			// 			root = "Bin"
-			// 		}
-			// 		createFileChecksumList(root)
-			// 	},
-			// }, {
+			Name:        "try",
+			ShortName:   "try",
+			Usage:       "查看将要输出的目录和文件",
+			Description: "不会真正创建和复制文件",
+			Action: func(c *cli.Context) {
+				err := prepareVersionFileContent()
+				if err != nil {
+					beego.Error("创建源目录文件列表出错：" + err.Error())
+					return
+				}
+				G_updateInfo.Print()
+			},
+		}, {
 			Name:        "outputUpdateInfo",
 			ShortName:   "ou",
 			Usage:       "输出升级信息md文件",
