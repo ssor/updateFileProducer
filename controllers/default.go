@@ -4,31 +4,56 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"github.com/astaxie/beego"
-	"github.com/astaxie/beego/config"
 	"github.com/codegangsta/cli"
 	"io"
 	"os"
 	"path/filepath"
 	// "strconv"
+	"io/ioutil"
 	"path"
 	"strings"
 )
 
 var (
-	G_updateInfo           *UpdateInfo
-	IgnoreFileNameList                            = []string{}
-	G_ignoreFolderNameList                        = []string{}
-	iniconf                config.ConfigContainer = nil
-	G_dirSrc                                      = "./"
-	G_dirDest                                     = "./output/"
-	G_appVersion                                  = ""
-	G_versionInfoFileName                         = "VersionInfo.md"
+	G_updateInfo          *UpdateInfo
+	G_versionInfoFileName = "VersionInfo.md"
+	// IgnoreFileNameList    = []string{}
+	// G_ignoreFolderNameList = []string{}
+	// G_dirSrc               = "./"
+	// G_dirDest              = "./output/"
+	// G_appVersion           = ""
+	// iniconf                config.ConfigContainer = nil
+)
+
+//系统配置项
+type Config struct {
+	IgnoreFolderNameList, IgnoreFileNameList []string
+	DirSrc, DirDest, AppVersion              string
+}
+
+func (this *Config) ListName() string {
+	return "系统配置"
+}
+func (this *Config) InfoList() []string {
+	list := []string{
+		fmt.Sprintf("应用版本:     %s", this.AppVersion),
+		fmt.Sprintf("应用源目录:   %s", this.DirSrc),
+		fmt.Sprintf("应用输出目录: %s", this.DirDest),
+		fmt.Sprintf("忽略的文件夹: %s", this.IgnoreFolderNameList),
+		fmt.Sprintf("忽略的文件名: %s", this.IgnoreFileNameList),
+	}
+	return list
+}
+
+var (
+	G_conf Config
 )
 
 func init() {
-	G_updateInfo = NewUpdateInfo("1.0", FileChecksumList{}, FileChecksumList{})
 	initConfig()
+	G_updateInfo = NewUpdateInfo(G_conf.AppVersion, FileChecksumList{}, FileChecksumList{})
 	go initCli()
 }
 
@@ -43,32 +68,32 @@ func (this *MainController) Get() {
 }
 
 func OutputVersionFile() {
-	destVerFile := G_dirDest + G_versionInfoFileName
+	destVerFile := G_conf.DirDest + G_versionInfoFileName
 	if Exist(destVerFile) == true { //将所有文件输出完成后，才能创建版本信息文件作为完成的标识，所以一开始不能存在该文件
 		if err := os.Remove(destVerFile); err != nil {
-			beego.Warn("删除输出目录的版本信息文件" + destVerFile + "出错：" + err.Error())
+			DebugSysF("删除输出目录的版本信息文件" + destVerFile + "出错：" + err.Error())
 			return
 		}
 	}
 	err := prepareVersionFileContent()
 	if err != nil {
-		beego.Error("创建源目录文件列表出错：" + err.Error())
+		DebugMustF("创建源目录文件列表出错：" + err.Error())
 		return
 	}
 	err = copyFileToOutputDir()
 	if err != nil {
-		beego.Error("向输出目录拷贝文件时出错：" + err.Error())
+		DebugMustF("向输出目录拷贝文件时出错：" + err.Error())
 		return
 	}
 
 	if err := createVersionInfoFile(destVerFile); err != nil {
-		beego.Error("在输出目录创建版本信息文件出错：" + err.Error())
+		DebugMustF("在输出目录创建版本信息文件出错：" + err.Error())
 		return
 	}
 	beego.Warn("升级文件输出成功")
 }
 func prepareVersionFileContent() error {
-	dirList, fileList, err := CreateChecksumPathList(G_dirSrc)
+	dirList, fileList, err := CreateChecksumPathList(G_conf.DirSrc)
 	if err != nil {
 		return err
 	}
@@ -84,7 +109,7 @@ func copyFileToOutputDir() error {
 	count := 0
 	for _, file := range G_updateInfo.DirList {
 		// destDir := strings.Replace(file.Path, G_dirSrc, G_dirDest+"Bin/", 1)
-		destDir := G_dirDest + "Bin/" + file.Path
+		destDir := G_conf.DirDest + "Bin/" + file.Path
 		if Exist(destDir) == false {
 			if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
 				return err
@@ -94,18 +119,19 @@ func copyFileToOutputDir() error {
 		}
 	}
 	beego.Warn(fmt.Sprintf("共创建了 %d 个新目录", count))
-	count = 0
+
+	copiedFileNameList := []string{}
 	// 同步文件
 	for _, file := range G_updateInfo.FileList {
 		// destDir := strings.Replace(file.Path, G_dirSrc, G_dirDest+"Bin/", 1)
-		destDir := G_dirDest + "Bin/" + file.Path
-		dirSrc := G_dirSrc + file.Path
+		destDir := G_conf.DirDest + "Bin/" + file.Path
+		dirSrc := G_conf.DirSrc + file.Path
 		if Exist(destDir) == false {
 			if err := CopyFile(destDir, dirSrc); err != nil {
 				return err
 			}
 			beego.Info("复制了文件：" + destDir)
-			count += 1
+			copiedFileNameList = append(copiedFileNameList, destDir)
 		} else {
 			if checksum, err := createChecksumForFile(destDir); err != nil {
 				return err
@@ -121,13 +147,17 @@ func copyFileToOutputDir() error {
 							return err
 						}
 						beego.Info("复制了文件：" + destDir)
-						count += 1
+						copiedFileNameList = append(copiedFileNameList, destDir)
 					}
 				}
 			}
 		}
 	}
-	beego.Warn(fmt.Sprintf("共复制了 %d 个文件", count))
+	beego.Warn(fmt.Sprintf("共复制了 %d 个文件", len(copiedFileNameList)))
+	for _, file := range copiedFileNameList {
+		beego.Debug(file)
+
+	}
 
 	return nil
 }
@@ -166,11 +196,11 @@ func CreateChecksumPathList(root string) (FileChecksumList, FileChecksumList, er
 		}
 		if info.IsDir() == true {
 			if isIgnoredDir(fullPath) == true {
-				beego.Debug(fmt.Sprintf("目录(忽略)：%s ", fullPath))
+				// beego.Debug(fmt.Sprintf("目录(忽略)：%s ", fullPath))
 				return nil
 			} else {
-				beego.Debug(fmt.Sprintf("目录：%s", fullPath))
-				pathTrimed := strings.Replace(fullPath, G_dirSrc, "", 1)
+				// beego.Debug(fmt.Sprintf("目录：%s", fullPath))
+				pathTrimed := strings.Replace(fullPath, G_conf.DirSrc, "", 1)
 				listDir = listDir.Add(NewFileChecksum(pathTrimed, ""))
 			}
 		} else {
@@ -180,15 +210,15 @@ func CreateChecksumPathList(root string) (FileChecksumList, FileChecksumList, er
 				return nil
 			}
 			if isIgnoredDir(fullPath) == true {
-				beego.Debug(fmt.Sprintf("文件(忽略)：%s  在忽略的文件夹中", fullPath))
+				// beego.Debug(fmt.Sprintf("文件(忽略)：%s  在忽略的文件夹中", fullPath))
 				return nil
 			}
-			beego.Debug(fmt.Sprintf("文件：%s", fullPath))
+			// beego.Debug(fmt.Sprintf("文件：%s", fullPath))
 
 			if checksum, err := createChecksumForFile(fullPath); err != nil {
 				return err
 			} else {
-				pathTrimed := strings.Replace(fullPath, G_dirSrc, "", 1)
+				pathTrimed := strings.Replace(fullPath, G_conf.DirSrc, "", 1)
 				listFile = listFile.Add(NewFileChecksum(pathTrimed, checksum))
 			}
 		}
@@ -203,7 +233,7 @@ func CreateChecksumPathList(root string) (FileChecksumList, FileChecksumList, er
 // func createFileChecksumList(root string) FileChecksumList{
 // 	beego.Info(fmt.Sprintf("升级的应用目录：%s", root))
 // 	if list, err := checksumPath(root); err != nil {
-// 		beego.Error(fmt.Sprintf("%s", err))
+// 		DebugMustF(fmt.Sprintf("%s", err))
 // 	} else {
 // 		// list.Print()
 // 		G_FileList = list
@@ -239,7 +269,7 @@ func initCli() {
 			Action: func(c *cli.Context) {
 				err := prepareVersionFileContent()
 				if err != nil {
-					beego.Error("创建源目录文件列表出错：" + err.Error())
+					DebugMustF("创建源目录文件列表出错：" + err.Error())
 					return
 				}
 				G_updateInfo.Print()
@@ -268,94 +298,89 @@ func initCli() {
 	// app.Run(os.Args)
 }
 
-func initConfig() {
-	var err error
-	iniconf, err = config.NewConfig("ini", "conf/app.conf")
-	if err != nil {
-		beego.Error(err.Error())
+func initConfig() error {
+	confFile := "conf/sys.toml"
+	if confData, err := ioutil.ReadFile(confFile); err != nil {
+		DebugMustF("系统配置出错：%s", err.Error())
+		return err
 	} else {
-		//忽略特定文件
-		ignoreFiles := iniconf.Strings("ignoredFiles")
-
-		temp := []string{}
-		for _, file := range ignoreFiles {
-			if len(file) > 0 {
-				temp = append(temp, file)
-			}
+		if _, err := toml.Decode(string(confData), &G_conf); err != nil {
+			DebugMustF("系统配置出错：%s", err.Error())
+			return err
 		}
-		ignoreFiles = temp
-		if len(ignoreFiles) > 0 {
-			IgnoreFileNameList = append(IgnoreFileNameList, ignoreFiles...)
-			beego.Info(fmt.Sprintf("现有 %d 个忽略的文件", len(IgnoreFileNameList)))
-			beego.Info("过滤文件名称如下：")
-			for _, keyword := range ignoreFiles {
-				beego.Debug(keyword)
-			}
-		} else {
-			beego.Info("没有需要忽略的文件")
-		}
-
-		ignoreFolders := iniconf.Strings("ignoredFolders")
-		temp = []string{}
-		for _, folder := range ignoreFolders {
-			if len(folder) > 0 {
-				temp = append(temp, folder)
-			}
-		}
-		ignoreFolders = temp
-		if len(ignoreFolders) > 0 {
-			G_ignoreFolderNameList = append(G_ignoreFolderNameList, ignoreFolders...)
-			beego.Info(fmt.Sprintf("现有 %d 个忽略的文件夹", len(G_ignoreFolderNameList)))
-			beego.Info("过滤的文件夹如下：")
-			for _, keyword := range ignoreFolders {
-				beego.Debug(keyword)
-			}
-		} else {
-			beego.Info("没有需要忽略的文件夹")
-		}
-
-		dirSrc := iniconf.String("srcDir")
-		if len(dirSrc) > 0 {
-			G_dirSrc = dirSrc
-		}
-		beego.Info("源目录：" + G_dirSrc)
-
-		dirDest := iniconf.String("destDir")
-		if len(dirDest) > 0 {
-			G_dirDest = dirDest
-		}
-		beego.Info("输出目录: " + G_dirDest)
-
-		appVersion := iniconf.String("appVersion")
-		if len(appVersion) > 0 {
-			G_appVersion = appVersion
-		}
-		beego.Info("应用版本号: " + G_appVersion)
-
-		// if locationCountTemp, err := iniconf.Int("locationCount"); err != nil {
-		// 	DebugMust(err.Error() + GetFileLocation())
-
-		// } else {
-		// 	if locationCountTemp > 0 {
-		// 		DebugInfo(fmt.Sprintf("获取货位数量：%d", locationCountTemp) + GetFileLocation())
-		// 		locationCount = locationCountTemp
-		// 	} else {
-		// 		DebugInfo(fmt.Sprintf("设置货位数量为默认值：%d", locationCount) + GetFileLocation())
-
-		// 	}
-		// }
-
-		// if err := iniconf.Set("locationCount", "23"); err != nil {
-		// 	beego.Warn(err.Error())
-		// }
-		// if err := iniconf.SaveConfigFile("conf/app.conf"); err != nil {
-		// 	beego.Warn(err.Error())
-		// }
+		DebugPrintList_Info(&G_conf)
 	}
 
+	return nil
+
+	// var err error
+	// iniconf, err = config.NewConfig("ini", "conf/app.conf")
+	// if err != nil {
+	// 	DebugMustF(err.Error())
+	// } else {
+	// 	//忽略特定文件
+	// 	ignoreFiles := iniconf.Strings("ignoredFiles")
+
+	// 	temp := []string{}
+	// 	for _, file := range ignoreFiles {
+	// 		if len(file) > 0 {
+	// 			temp = append(temp, file)
+	// 		}
+	// 	}
+	// 	ignoreFiles = temp
+	// 	if len(ignoreFiles) > 0 {
+	// 		IgnoreFileNameList = append(IgnoreFileNameList, ignoreFiles...)
+	// 		beego.Info(fmt.Sprintf("现有 %d 个忽略的文件", len(IgnoreFileNameList)))
+	// 		beego.Info("过滤文件名称如下：")
+	// 		for _, keyword := range ignoreFiles {
+	// 			beego.Debug(keyword)
+	// 		}
+	// 	} else {
+	// 		beego.Info("没有需要忽略的文件")
+	// 	}
+
+	// 	ignoreFolders := iniconf.Strings("ignoredFolders")
+	// 	temp = []string{}
+	// 	for _, folder := range ignoreFolders {
+	// 		if len(folder) > 0 {
+	// 			temp = append(temp, folder)
+	// 		}
+	// 	}
+	// 	ignoreFolders = temp
+	// 	if len(ignoreFolders) > 0 {
+	// 		G_ignoreFolderNameList = append(G_ignoreFolderNameList, ignoreFolders...)
+	// 		beego.Info(fmt.Sprintf("现有 %d 个忽略的文件夹", len(G_ignoreFolderNameList)))
+	// 		beego.Info("过滤的文件夹如下：")
+	// 		for _, keyword := range ignoreFolders {
+	// 			beego.Debug(keyword)
+	// 		}
+	// 	} else {
+	// 		beego.Info("没有需要忽略的文件夹")
+	// 	}
+
+	// 	dirSrc := iniconf.String("srcDir")
+	// 	if len(dirSrc) > 0 {
+	// 		G_dirSrc = dirSrc
+	// 	}
+	// 	beego.Info("源目录：" + G_dirSrc)
+
+	// 	dirDest := iniconf.String("destDir")
+	// 	if len(dirDest) > 0 {
+	// 		G_dirDest = dirDest
+	// 	}
+	// 	beego.Info("输出目录: " + G_dirDest)
+
+	// 	appVersion := iniconf.String("appVersion")
+	// 	if len(appVersion) > 0 {
+	// 		G_appVersion = appVersion
+	// 	}
+	// 	beego.Info("应用版本号: " + G_appVersion)
+	// }
+
 }
+
 func isIgnoredFile(name string) bool {
-	for _, fileName := range IgnoreFileNameList {
+	for _, fileName := range G_conf.IgnoreFileNameList {
 		if fileName == name {
 			return true
 		}
@@ -364,8 +389,8 @@ func isIgnoredFile(name string) bool {
 	return false
 }
 func isIgnoredDir(name string) bool {
-	for _, dirName := range G_ignoreFolderNameList {
-		if strings.Contains(name, G_dirSrc+dirName) {
+	for _, dirName := range G_conf.IgnoreFolderNameList {
+		if strings.Contains(name, G_conf.DirSrc+dirName) {
 			return true
 		}
 		// if name == G_dirSrc+dirName {

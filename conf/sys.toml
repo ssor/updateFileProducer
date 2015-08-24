@@ -1,0 +1,6 @@
+
+AppVersion = "1.29"
+DirSrc = "../pickupTek/"
+DirDest = "../../../others/binpickupLinux/"
+IgnoreFolderNameList = ["tests","routers","models","controllers","pickupTekLib",".git","db"]
+IgnoreFileNameList = [".DS_Store","main.go","db.db3","db.zip"]
